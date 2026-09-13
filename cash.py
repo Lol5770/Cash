@@ -5,7 +5,7 @@ import random
 import uuid
 import urllib3
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import os
 from dotenv import load_dotenv
 
@@ -46,9 +46,6 @@ FIRST_NAMES = ["Rahul","Amit","Priya","Neha","Rohit","Pooja","Vijay","Ankita",
 LAST_NAMES  = ["Kumar","Sharma","Singh","Gupta","Verma","Yadav","Mishra",
                "Patel","Shah","Joshi","Tiwari","Pandey","Dubey","Chauhan"]
 DOMAINS     = ["gmail.com","yahoo.com","outlook.com","hotmail.com"]
-
-# States
-PHONE, OTP = range(2)
 
 # ════════════════════════════════════════════════════
 #  HELPERS
@@ -268,13 +265,11 @@ def run(phone):
     name  = random_name()
     email = random_email(name)
 
-    status_msg = f"\n{'═'*50}\n  📱 {phone}\n  👤 {name}  |  📧 {email}\n{'═'*50}\n"
-
     if is_registered(s, phone):
         return {
             "phone": phone,
             "status": "⛔ already registered",
-            "message": status_msg + "⛔ Already registered — skip"
+            "message": "⛔ Already registered — skip"
         }
 
     otp_guid = send_otp(s, phone)
@@ -287,7 +282,7 @@ def run(phone):
         "s": s,
         "cs": cs,
         "status": "pending_otp",
-        "message": status_msg + "✅ OTP sent! Enter OTP below:"
+        "message": "✅ OTP sent! Enter OTP:"
     }
 
 def verify_and_complete(phone, otp, otp_guid, s, cs, name, email):
@@ -331,113 +326,77 @@ def verify_and_complete(phone, otp, otp_guid, s, cs, name, email):
 # ════════════════════════════════════════════════════
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command"""
-    reply_keyboard = [["🚀 Start Process"]]
     await update.message.reply_text(
         "╔══════════════════════════════════════════════╗\n"
         "║        CashKaro 15rs Bot  🖤                 ║\n"
         "║      Click button to proceed                 ║\n"
-        "╚══════════════════════════════════════════════╝\n\n"
-        "This bot will create CashKaro accounts and credit 15rs automatically.",
-        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+        "╚══════════════════════════════════════════════╝",
+        reply_markup=ReplyKeyboardMarkup([["🚀 Start"]], one_time_keyboard=True)
     )
 
-async def ask_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ask for phone number"""
-    if update.message.text == "🚀 Start Process":
+async def process_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process all messages"""
+    text = update.message.text
+    user_id = update.message.from_user.id
+    
+    # Start button
+    if text == "🚀 Start":
         await update.message.reply_text(
             "📱 Enter phone number (10 digits):",
             reply_markup=ReplyKeyboardRemove()
         )
-        return PHONE
-    return PHONE
-
-async def handle_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle phone number input"""
-    phone = update.message.text.strip()
+        context.user_data[user_id] = {"stage": "phone"}
+        return
     
-    if not phone.isdigit() or len(phone) != 10:
-        await update.message.reply_text("❌ Invalid phone number. Please enter 10 digits.")
-        return PHONE
+    # Get current stage
+    stage = context.user_data.get(user_id, {}).get("stage", "")
     
-    await update.message.reply_text("⏳ Processing... sending OTP...")
-    
-    try:
-        result = run(phone)
-        context.user_data['result'] = result
+    # Phone number stage
+    if stage == "phone":
+        if not text.isdigit() or len(text) != 10:
+            await update.message.reply_text("❌ Invalid! Enter 10 digits.")
+            return
         
-        if result['status'] == "pending_otp":
+        await update.message.reply_text("⏳ Processing... sending OTP...")
+        
+        try:
+            result = run(text)
+            context.user_data[user_id] = result
+            context.user_data[user_id]["stage"] = "otp"
+            
             await update.message.reply_text(result['message'])
-            return OTP
-        else:
-            await update.message.reply_text(result['message'])
-            reply_keyboard = [["✅ Continue"], ["❌ Exit"]]
-            await update.message.reply_text(
-                "Do you want to process another number?",
-                reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
-            )
-            return PHONE
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
-        return PHONE
-
-async def handle_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle OTP input"""
-    otp = update.message.text.strip()
-    result = context.user_data.get('result', {})
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error: {e}")
+            context.user_data[user_id] = {"stage": "phone"}
     
-    if not otp.isdigit():
-        await update.message.reply_text("❌ Invalid OTP. Please enter digits only.")
-        return OTP
-    
-    await update.message.reply_text("⏳ Verifying OTP and completing tutorial...")
-    
-    try:
-        final_result = verify_and_complete(
-            result['phone'],
-            otp,
-            result['otp_guid'],
-            result['s'],
-            result['cs'],
-            result['name'],
-            result['email']
+    # OTP stage
+    elif stage == "otp":
+        if not text.isdigit():
+            await update.message.reply_text("❌ Invalid OTP!")
+            return
+        
+        await update.message.reply_text("⏳ Verifying OTP...")
+        
+        data = context.user_data.get(user_id, {})
+        result = verify_and_complete(
+            data['phone'],
+            text,
+            data['otp_guid'],
+            data['s'],
+            data['cs'],
+            data['name'],
+            data['email']
         )
         
-        await update.message.reply_text(final_result['message'])
-        
-        reply_keyboard = [["✅ Continue"], ["❌ Exit"]]
+        await update.message.reply_text(result['message'])
         await update.message.reply_text(
-            "📊 RESULT:\n"
-            f"  Status: {final_result['status']}\n"
-            f"  Phone: {final_result['phone']}\n"
-            f"  UID: {final_result.get('user_id', '—')}\n\n"
-            "Do you want to process another number?",
-            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
+            f"📊 Result:\n"
+            f"Status: {result['status']}\n"
+            f"Phone: {result['phone']}\n"
+            f"UID: {result.get('user_id', '—')}",
+            reply_markup=ReplyKeyboardMarkup([["🚀 Start"]], one_time_keyboard=True)
         )
-        return PHONE
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
-        return PHONE
-
-async def handle_continue(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle continue or exit"""
-    if update.message.text == "✅ Continue":
-        await update.message.reply_text(
-            "📱 Enter phone number (10 digits):",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return PHONE
-    else:
-        reply_keyboard = [["🚀 Start Process"]]
-        await update.message.reply_text(
-            "Bye! Click the button to start again.",
-            reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True)
-        )
-        return PHONE
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel conversation"""
-    await update.message.reply_text("Cancelled!")
-    return ConversationHandler.END
+        context.user_data[user_id] = {"stage": "phone"}
 
 # ════════════════════════════════════════════════════
 #  MAIN BOT
@@ -445,22 +404,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            PHONE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_phone),
-                MessageHandler(filters.Regex("^(✅ Continue|❌ Exit)$"), handle_continue),
-                MessageHandler(filters.Regex("^🚀 Start Process$"), ask_phone),
-            ],
-            OTP: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_otp)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_message))
     
-    app.add_handler(conv_handler)
+    print("✅ Bot started!")
     app.run_polling()
 
 if __name__ == '__main__':
     main()
-        
+    
